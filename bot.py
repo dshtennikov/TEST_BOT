@@ -1,200 +1,124 @@
-#!/usr/bin/env python3
-"""
-Telegram bot for Microsoft Office help via GigaChat API.
-
-Uses:
-- TELEGRAM_TOKEN (бот в Telegram)
-- GIGACHAT_CLIENT, GIGACHAT_CLIENT_SECRET (для получения токена)
-- CGIGA_CHAT_TOKEN (опционально, можно оставить пустым)
-- GIGACHAT_AUTH_URL, GIGACHAT_API_URL (адреса API)
-
-Файл prompt.txt содержит системный промпт (ограничивает ответы областью Office).
-"""
-
 import os
 import logging
-import uuid
 import requests
-from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from dotenv import load_dotenv
+from prompts import MICROSOFT_OFFICE_PROMPT
 
-# ========================================
-# Загрузка окружения
-# ========================================
+# Загрузка переменных окружения
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-
-CLIENT_ID = os.getenv("GIGACHAT_CLIENT")
-CLIENT_SECRET = os.getenv("GIGACHAT_CLIENT_SECRET")
-ACCESS_TOKEN = os.getenv("CGIGA_CHAT_TOKEN")  # может быть пустым
-AUTH_URL = os.getenv("GIGACHAT_AUTH_URL")
-API_URL = os.getenv("GIGACHAT_API_URL")
-
-PROMPT_FILE = os.getenv("PROMPT_FILE", "prompt.txt")
-try:
-    with open(PROMPT_FILE, "r", encoding="utf-8") as f:
-        SYSTEM_PROMPT = f.read().strip()
-except FileNotFoundError:
-    SYSTEM_PROMPT = "You are an assistant specialized in Microsoft Office (Word, Excel, PowerPoint, Outlook)."
-
-# ========================================
-# Логирование
-# ========================================
+# Настройка логирования
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# Получение токена бота
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GIGACHAT_CLIENT_ID = os.getenv("GIGACHAT_CLIENT_ID")
+GIGACHAT_CLIENT_SECRET = os.getenv("GIGACHAT_CLIENT_SECRET")
 
-# ========================================
-# Авторизация в GigaChat
-# ========================================
-def get_gigachat_token() -> str:
-    """
-    Получить access_token. Если в .env уже указан CGIGA_CHAT_TOKEN — используем его.
-    Если он пустой или устарел — запрашиваем новый по client/secret.
-    """
-    global ACCESS_TOKEN
-    if ACCESS_TOKEN:
-        return ACCESS_TOKEN
+# URL для получения токена и отправки запросов
+AUTH_URL = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+GIGACHAT_API_URL = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
 
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "RqUID": str(uuid.uuid4()),  # уникальный ID запроса
-    }
-    data = {
-        "scope": "GIGACHAT_API_PERS",  # может отличаться (ORG/TEAM), уточните у себя
-    }
+# Кэширование access_token (в реальном проекте лучше использовать более надёжное хранилище)
+_cached_access_token = None
 
-    resp = requests.post(
+def get_gigachat_access_token():
+    global _cached_access_token
+    if _cached_access_token:
+        return _cached_access_token
+
+    auth_response = requests.post(
         AUTH_URL,
-        headers=headers,
-        auth=(CLIENT_ID, CLIENT_SECRET),
-        data=data,
-        verify=False,  # при самоподписанном сертификате, если есть корневой CA — уберите
-        timeout=30,
+        data={"scope": "GIGACHAT_API_PUB"},
+        auth=(GIGACHAT_CLIENT_ID, GIGACHAT_CLIENT_SECRET),
+        verify=False  # ⚠️ В продакшене лучше использовать сертификаты!
     )
+    if auth_response.status_code != 200:
+        raise Exception(f"Не удалось получить токен: {auth_response.text}")
 
-    if resp.status_code != 200:
-        raise RuntimeError(f"GigaChat auth failed: {resp.status_code} {resp.text}")
+    token_data = auth_response.json()
+    _cached_access_token = token_data["access_token"]
+    return _cached_access_token
 
-    token = resp.json().get("access_token")
-    if not token:
-        raise RuntimeError("Не удалось получить access_token от GigaChat")
+def ask_gigachat(question: str) -> str:
+    prompt = MICROSOFT_OFFICE_PROMPT.format(user_question=question)
+    token = get_gigachat_access_token()
 
-    ACCESS_TOKEN = token
-    return token
-
-
-# ========================================
-# Вызов GigaChat API
-# ========================================
-def call_gigachat(system_prompt: str, user_message: str) -> str:
-    token = get_gigachat_token()
-
-    payload = {
-        "model": "GigaChat:latest",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        "temperature": 0.2,
-        "max_tokens": 800,
-    }
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
 
-    resp = requests.post(API_URL, json=payload, headers=headers, verify=False, timeout=30)
+    payload = {
+        "model": "GigaChat",
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 1000
+    }
 
-    if resp.status_code == 401:
-        # токен истёк → сбрасываем и пробуем снова
-        global ACCESS_TOKEN
-        ACCESS_TOKEN = None
-        return call_gigachat(system_prompt, user_message)
+    response = requests.post(GIGACHAT_API_URL, json=payload, headers=headers, verify=False)
+    
+    if response.status_code == 401:
+        # Токен мог истечь — очищаем кэш и пробуем снова
+        global _cached_access_token
+        _cached_access_token = None
+        token = get_gigachat_access_token()
+        headers["Authorization"] = f"Bearer {token}"
+        response = requests.post(GIGACHAT_API_URL, json=payload, headers=headers, verify=False)
 
-    if resp.status_code != 200:
-        return f"Ошибка от GigaChat API: {resp.status_code} {resp.text}"
+    if response.status_code != 200:
+        logger.error(f"GigaChat error: {response.status_code} - {response.text}")
+        return "Извините, произошла ошибка при обращении к GigaChat."
 
-    data = resp.json()
     try:
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception:
-        return str(data)
+        answer = response.json()["choices"][0]["message"]["content"]
+        return answer.strip()
+    except (KeyError, IndexError):
+        return "Не удалось получить ответ от GigaChat."
 
-
-# ========================================
-# Ограничение области (Microsoft Office)
-# ========================================
-OFFICE_KEYWORDS = [
-    "word", "excel", "powerpoint", "outlook", "office", "макрос", "формула", "таблица",
-    "ppt", "docx", "xlsx", "presentation", "mail merge", "слайды", "формулы", "vba", "макросы"
-]
-
-def seems_outside_office(user_text: str) -> bool:
-    low = user_text.lower()
-    for k in OFFICE_KEYWORDS:
-        if k in low:
-            return False
-    return True
-
-
-# ========================================
-# Telegram handlers
-# ========================================
+# Обработчики Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "Привет! Я бот-помощник по Microsoft Office (Word, Excel, PowerPoint, Outlook).\n"
-        "Задайте вопрос, например: «Как сделать сводную таблицу в Excel?»"
+    await update.message.reply_text(
+        "Привет! Я бот-помощник по Microsoft Office (Word, Excel, PowerPoint, Outlook). "
+        "Задайте ваш вопрос — и я постараюсь помочь!"
     )
-    await update.message.reply_text(text)
-
-
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Я отвечаю только на вопросы по Microsoft Office (Word, Excel, PowerPoint, Outlook).")
-
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text or ""
-    user_id = update.effective_user.id
-    logger.info("Message from %s: %s", user_id, user_text[:200])
+    user_text = update.message.text
+    logger.info(f"Получен вопрос: {user_text}")
 
-    if seems_outside_office(user_text):
-        await update.message.reply_text(
-            "Извините, я работаю только с вопросами по Microsoft Office. "
-            "Задайте вопрос про Word, Excel, PowerPoint или Outlook."
-        )
-        return
+    try:
+        answer = ask_gigachat(user_text)
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        answer = "Произошла ошибка при обработке запроса. Попробуйте позже."
 
-    await update.message.reply_text("Обрабатываю запрос…")
-    reply = call_gigachat(SYSTEM_PROMPT, user_text)
+    await update.message.reply_text(answer)
 
-    MAX_LEN = 4000
-    if len(reply) <= MAX_LEN:
-        await update.message.reply_text(reply)
-    else:
-        for i in range(0, len(reply), MAX_LEN):
-            await update.message.reply_text(reply[i:i+MAX_LEN])
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error("Произошла ошибка при обработке обновления", exc_info=context.error)
 
-
-# ========================================
-# Main
-# ========================================
+# Запуск бота
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    if not TELEGRAM_TOKEN or not GIGACHAT_CLIENT_ID or not GIGACHAT_CLIENT_SECRET:
+        raise ValueError("Отсутствуют обязательные переменные окружения в .env")
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    logger.info("Bot started")
-    app.run_polling()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_error_handler(error_handler)
 
+    logger.info("Бот запущен...")
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
