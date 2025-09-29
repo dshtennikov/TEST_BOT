@@ -42,17 +42,17 @@ cd office-assistant-bot'''
 
 Создайте .env файл:
 
-bash
+'''bash
 # Автоматическое создание тестового .env
 bash create_temp_env.sh
 
 # Или интерактивное создание
-bash interactive_env_setup.sh
+bash interactive_env_setup.sh'''
 ### 3. Ручная установка (локально)
 Установка Tesseract OCR
 Ubuntu/Debian:
 
-bash
+'''bash
 sudo apt update
 sudo apt install -y tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng
 Windows:
@@ -71,7 +71,7 @@ python -m venv venv
 source venv/bin/activate  # Linux/Mac
 # или venv\Scripts\activate  # Windows
 
-pip install -r requirements.txt
+pip install -r requirements.txt'''
 ### 4. Настройка окружения
 Создайте файл .env:
 
