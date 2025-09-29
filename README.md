@@ -69,7 +69,8 @@ brew install tesseract tesseract-lang
 bash
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
-# или venv\Scripts\activate  # Windows
+#### или 
+venv\Scripts\activate  #Windows
 
 pip install -r requirements.txt
 ### 4. Настройка окружения
@@ -142,11 +143,11 @@ prompts.py - Промпты для AI-модели
 
 Обработка файлов
 python
-# Пример обработки PDF
+## Пример обработки PDF
 processor = FileProcessor()
 text = processor.process_pdf("document.pdf")
 
-# OCR для изображений
+## OCR для изображений
 text = processor.process_image("screenshot.png")
 Безопасность
 ✅ Проверка размера файлов (макс. 20MB)
@@ -162,7 +163,7 @@ Common Issues
 Tesseract не установлен:
 
 bash
-# Проверка установки
+## Проверка установки
 tesseract --version
 tesseract --list-langs
 Ошибки зависимостей:
@@ -178,7 +179,7 @@ pip install --upgrade -r requirements.txt
 Ошибки OCR:
 
 bash
-# Тестирование OCR
+## Тестирование OCR
 python test_ocr.py
 Логирование
 Уровни логирования настраиваются в .env:
@@ -205,11 +206,11 @@ bash
 git clone https://github.com/yourusername/office-assistant-bot.git
 cd office-assistant-bot
 
-# Установка dev-зависимостей
+## Установка dev-зависимостей
 pip install -r requirements.txt
 pip install pytest pylint black
 
-# Запуск тестов
+## Запуск тестов
 python test_ocr.py
 python -m pytest tests/
 Структура проекта
@@ -220,19 +221,19 @@ tests/
 └── test_bot.py          # Тесты бота
 Code Style
 bash
-# Форматирование кода
+## Форматирование кода
 black bot.py file_processor.py gigachat_client.py
 
-# Проверка стиля
+## Проверка стиля
 pylint bot.py
 📄 Лицензия
 Этот проект распространяется под лицензией MIT. Подробнее см. в файле LICENSE.
 
 👥 Авторы
-Ваше Имя
+DG
 
 🙏 Благодарности
-SberAI за GigaChat API
+SberAI за GigaChat API 
 
 Tesseract OCR за OCR движок
 
