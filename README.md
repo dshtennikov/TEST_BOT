@@ -32,9 +32,9 @@ text
 
 ### 1. Клонирование репозитория
 
-```bash
+'''bash
 git clone https://github.com/yourusername/office-assistant-bot.git
-cd office-assistant-bot
+cd office-assistant-bot'''
 ### 2. Настройка в GitHub Codespaces
 Откройте проект в GitHub Codespaces
 
