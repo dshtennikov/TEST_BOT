@@ -1,214 +1,205 @@
-# bot.py
 import logging
-from pathlib import Path
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-from PIL import Image
-import pytesseract
-import fitz  # PyMuPDF
-from docx import Document
-import openpyxl
-from pdf2image import convert_from_path
+from telegram.ext import (
+    ApplicationBuilder, 
+    ContextTypes, 
+    CommandHandler, 
+    MessageHandler, 
+    filters
+)
+from pathlib import Path
+
+from config import Config
+from file_processor import FileProcessor
+from gigachat_client import GigaChatClient
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# Константы (должны быть определены где-то выше в коде)
-DOWNLOAD_DIR = Path("downloads")
-DOWNLOAD_DIR.mkdir(exist_ok=True)
-
-# Функция send_to_gigachat должна быть определена
-def send_to_gigachat(prompt: str) -> str:
-    # Реализация отправки в GigaChat
-    pass
-
-# Функция start должна быть определена
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Бот запущен!")
-
-# Функция handle_text должна быть определена
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Обрабатываю текстовое сообщение...")
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка фотографий"""
-    photo = update.message.photo[-1]  # Берем самую большую версию фото
-    file = await context.bot.get_file(photo.file_id)
-    local_path = DOWNLOAD_DIR / f"photo_{photo.file_id}.jpg"
+class OfficeAssistantBot:
+    def __init__(self):
+        self.config = Config()
+        self.file_processor = FileProcessor()
+        self.gigachat_client = GigaChatClient()
+        self.application = None
     
-    try:
-        await file.download_to_drive(custom_path=str(local_path))
-        text = ocr_image(local_path)
-        prompt = f"Пользователь прислал изображение. Распознанный текст:\n\n{text}\n\nВопрос: {update.message.caption or 'Нет явного вопроса — прокомментируй содержимое.'}"
-        reply = send_to_gigachat(prompt)
-        await update.message.reply_text(reply)
-    except Exception as e:
-        logger.exception('OCR failed')
-        await update.message.reply_text(f"Ошибка при OCR: {e}")
-    finally:
-        # Удаляем временный файл
-        if local_path.exists():
-            local_path.unlink()
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /start"""
+        welcome_text = """
+👋 Привет! Я - Ассистент Преподавателя по Цифровым технологиям для менеджеров!
 
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка документов"""
-    doc = update.message.document
-    file = await context.bot.get_file(doc.file_id)
-    local_path = DOWNLOAD_DIR / f"{doc.file_id}_{doc.file_name}"
+🤖 Я помогу тебе с вопросами по Microsoft Office:
+• Word, Excel, PowerPoint
+• Формулы, макросы, автоматизация
+• Проблемы совместимости версий
+• Пошаговые инструкции
+
+📎 Можешь присылать мне:
+• Текстовые вопросы
+• Изображения с текстом
+• PDF, DOCX, XLSX файлы
+
+Просто задай вопрос или загрузи файл! 🚀
+        """
+        await update.message.reply_text(welcome_text)
     
-    try:
-        await file.download_to_drive(custom_path=str(local_path))
-        
-        if doc.mime_type == 'application/pdf' or (doc.file_name and doc.file_name.lower().endswith('.pdf')):
-            await update.message.reply_text("PDF получен — извлекаю текст...")
-            try:
-                text = extract_text_from_pdf(local_path)
-                prompt = f"Пользователь прислал PDF. Извлечённый текст:\n\n{text[:4000]}\n\nВопрос: {update.message.caption or 'Прокомментируй содержание.'}"
-                reply = send_to_gigachat(prompt)
-                await update.message.reply_text(reply)
-            except Exception as e:
-                logger.exception('PDF processing failed')
-                await update.message.reply_text(f"Ошибка при обработке PDF: {e}")
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик команды /help"""
+        help_text = """
+📖 Доступные команды:
+/start - Начать работу
+/help - Показать эту справку
+/clear - Очистить историю диалога
 
-        elif doc.mime_type in [
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'application/msword'] or (doc.file_name and doc.file_name.lower().endswith(('.doc', '.docx'))):
-            await update.message.reply_text("DOCX получен — извлекаю текст...")
-            try:
-                text = extract_text_from_docx(local_path)
-                prompt = f"Пользователь прислал DOCX. Извлечённый текст:\n\n{text[:4000]}\n\nВопрос: {update.message.caption or 'Прокомментируй содержание.'}"
-                reply = send_to_gigachat(prompt)
-                await update.message.reply_text(reply)
-            except Exception as e:
-                logger.exception('DOCX processing failed')
-                await update.message.reply_text(f"Ошибка при обработке DOCX: {e}")
+📋 Примеры вопросов:
+• "Как сделать оглавление в Word?"
+• "Почему не работает функция XLOOKUP?"
+• "Как посчитать сумму в столбце Excel?"
 
-        elif doc.mime_type in [
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'application/vnd.ms-excel'] or (doc.file_name and doc.file_name.lower().endswith(('.xls', '.xlsx'))):
-            await update.message.reply_text("XLSX получен — извлекаю данные...")
-            try:
-                text = extract_text_from_xlsx(local_path)
-                prompt = f"Пользователь прислал XLSX. Извлечённые данные:\n\n{text[:4000]}\n\nВопрос: {update.message.caption or 'Прокомментируй данные.'}"
-                reply = send_to_gigachat(prompt)
-                await update.message.reply_text(reply)
-            except Exception as e:
-                logger.exception('XLSX processing failed')
-                await update.message.reply_text(f"Ошибка при обработке XLSX: {e}")
-        else:
-            await update.message.reply_text("Поддерживаются только PDF, DOCX и XLSX.")
+🖼️ Поддерживаемые файлы:
+• Изображения (JPG, PNG) - распознаем текст
+• PDF, DOCX, XLSX - извлекаем содержимое
+        """
+        await update.message.reply_text(help_text)
     
-    except Exception as e:
-        logger.exception('Document download failed')
-        await update.message.reply_text(f"Ошибка при загрузке файла: {e}")
-    finally:
-        # Удаляем временный файл
-        if local_path.exists():
-            local_path.unlink()
-
-def ocr_image(path: Path) -> str:
-    """OCR для изображений"""
-    try:
-        img = Image.open(path)
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        text = pytesseract.image_to_string(img, lang='rus+eng')  # Добавлена поддержка русского
-        return text.strip() if text else "Текст не распознан"
-    except Exception as e:
-        logger.error(f"OCR error: {e}")
-        return f"Ошибка OCR: {e}"
-
-def extract_text_from_pdf(path: Path) -> str:
-    """Извлечение текста из PDF"""
-    try:
-        doc = fitz.open(str(path))
-        full_text = []
-        need_ocr_pages = []
-        
-        for page_num in range(doc.page_count):
-            page = doc.load_page(page_num)
-            text = page.get_text().strip()
-            if text:
-                full_text.append(f"Страница {page_num + 1}:\n{text}")
-            else:
-                need_ocr_pages.append(page_num)
-        
-        # OCR для страниц без текста
-        if need_ocr_pages:
-            try:
-                images = convert_from_path(str(path), first_page=min(need_ocr_pages)+1, last_page=max(need_ocr_pages)+1)
-                for i, page_num in enumerate(need_ocr_pages):
-                    img = images[i]
-                    txt = pytesseract.image_to_string(img, lang='rus+eng')
-                    full_text.append(f"Страница {page_num + 1} (OCR):\n{txt}")
-            except Exception as ocr_error:
-                logger.error(f"PDF OCR failed: {ocr_error}")
-                full_text.append(f"Страницы {need_ocr_pages}: OCR не удался")
-        
-        doc.close()
-        return "\n\n".join(full_text) if full_text else "Текст не найден в PDF"
+    async def clear_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Очистка истории диалога"""
+        self.gigachat_client.clear_history()
+        await update.message.reply_text("🗑️ История диалога очищена!")
     
-    except Exception as e:
-        logger.error(f"PDF extraction error: {e}")
-        return f"Ошибка извлечения PDF: {e}"
-
-def extract_text_from_docx(path: Path) -> str:
-    """Извлечение текста из DOCX"""
-    try:
-        doc = Document(str(path))
-        text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-        return text if text else "Текст не найден в DOCX"
-    except Exception as e:
-        logger.error(f"DOCX extraction error: {e}")
-        return f"Ошибка извлечения DOCX: {e}"
-
-def extract_text_from_xlsx(path: Path) -> str:
-    """Извлечение текста из XLSX"""
-    try:
-        wb = openpyxl.load_workbook(str(path), data_only=True)
-        all_text = []
+    async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка текстовых сообщений"""
+        user_message = update.message.text
         
-        for sheet in wb.sheetnames:
-            ws = wb[sheet]
-            rows = []
-            for row in ws.iter_rows(values_only=True):
-                row_text = "\t".join([str(cell) if cell is not None else '' for cell in row])
-                if row_text.strip():  # Пропускаем пустые строки
-                    rows.append(row_text)
+        # Показываем статус обработки
+        await update.message.reply_chat_action("typing")
+        
+        try:
+            # Отправляем в GigaChat
+            response = self.gigachat_client.send_message(user_message)
+            await update.message.reply_text(response)
             
-            if rows:  # Добавляем только непустые листы
-                all_text.append(f"[Лист: {sheet}]\n" + "\n".join(rows))
-        
-        wb.close()
-        return "\n\n---ЛИСТ---\n\n".join(all_text) if all_text else "Данные не найдены в XLSX"
+        except Exception as e:
+            logger.error(f"Text processing error: {e}")
+            await update.message.reply_text("❌ Произошла ошибка при обработке запроса. Попробуйте еще раз.")
     
-    except Exception as e:
-        logger.error(f"XLSX extraction error: {e}")
-        return f"Ошибка извлечения XLSX: {e}"
+    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка фотографий"""
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        local_path = Path(Config.DOWNLOAD_DIR) / f"photo_{photo.file_id}.jpg"
+        
+        try:
+            await update.message.reply_text("🖼️ Обрабатываю изображение...")
+            
+            # Скачиваем файл
+            await file.download_to_drive(custom_path=str(local_path))
+            
+            # OCR обработка
+            extracted_text = self.file_processor.process_image(local_path)
+            user_question = update.message.caption or "Что на этом изображении?"
+            
+            # Отправляем в GigaChat
+            response = self.gigachat_client.send_message(
+                user_question, 
+                extracted_text, 
+                "image"
+            )
+            await update.message.reply_text(response)
+            
+        except Exception as e:
+            logger.exception('Photo processing failed')
+            await update.message.reply_text(f"❌ Ошибка при обработке изображения: {e}")
+        finally:
+            # Удаляем временный файл
+            if local_path.exists():
+                local_path.unlink()
+    
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка документов"""
+        doc = update.message.document
+        file = await context.bot.get_file(doc.file_id)
+        local_path = Path(Config.DOWNLOAD_DIR) / f"{doc.file_id}_{doc.file_name}"
+        
+        try:
+            # Проверка размера файла
+            if doc.file_size and doc.file_size > Config.MAX_FILE_SIZE:
+                await update.message.reply_text("❌ Файл слишком большой. Максимальный размер: 20MB")
+                return
+            
+            # Определяем тип файла
+            file_type = self.file_processor.get_file_type(doc.file_name, doc.mime_type)
+            
+            if file_type == 'unknown':
+                await update.message.reply_text("❌ Поддерживаются только PDF, DOCX, XLSX файлы и изображения")
+                return
+            
+            # Скачиваем файл
+            await file.download_to_drive(custom_path=str(local_path))
+            await update.message.reply_text(f"📎 Обрабатываю {file_type.upper()} файл...")
+            
+            # Обработка в зависимости от типа файла
+            extracted_text = ""
+            if file_type == 'pdf':
+                extracted_text = self.file_processor.process_pdf(local_path)
+            elif file_type == 'docx':
+                extracted_text = self.file_processor.process_docx(local_path)
+            elif file_type == 'xlsx':
+                extracted_text = self.file_processor.process_xlsx(local_path)
+            
+            # Обрезаем текст если слишком длинный
+            if len(extracted_text) > Config.MAX_TEXT_LENGTH:
+                extracted_text = extracted_text[:Config.MAX_TEXT_LENGTH] + "\n\n... (текст обрезан)"
+            
+            user_question = update.message.caption or f"Проанализируй этот {file_type} файл"
+            
+            # Отправляем в GigaChat
+            response = self.gigachat_client.send_message(
+                user_question, 
+                extracted_text, 
+                file_type
+            )
+            await update.message.reply_text(response)
+            
+        except Exception as e:
+            logger.exception('Document processing failed')
+            await update.message.reply_text(f"❌ Ошибка при обработке документа: {e}")
+        finally:
+            # Удаляем временный файл
+            if local_path.exists():
+                local_path.unlink()
+    
+    def setup_handlers(self):
+        """Настройка обработчиков"""
+        self.application.add_handler(CommandHandler("start", self.start))
+        self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("clear", self.clear_history))
+        self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
+        self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
+    
+    def run(self):
+        """Запуск бота"""
+        try:
+            Config.validate()
+            
+            self.application = ApplicationBuilder().token(Config.TELEGRAM_TOKEN).build()
+            self.setup_handlers()
+            
+            logger.info('🤖 Бот запущен!')
+            self.application.run_polling()
+            
+        except Exception as e:
+            logger.error(f"Failed to start bot: {e}")
+            print(f"Ошибка запуска: {e}")
 
 def main():
-    """Основная функция запуска бота"""
-    # Получаем токены из переменных окружения
-    TELEGRAM_TOKEN = "YOUR_TELEGRAM_TOKEN"  # Должно быть из os.getenv()
-    GIGA_CHAT_TOKEN = "YOUR_GIGACHAT_TOKEN"  # Должно быть из os.getenv()
-    
-    if not TELEGRAM_TOKEN or not GIGA_CHAT_TOKEN:
-        logger.error('TELEGRAM_TOKEN or GIGA_CHAT_TOKEN not set in environment')
-        print('Set TELEGRAM_TOKEN and GIGA_CHAT_TOKEN in env or .env file (see .env.example)')
-        return
-
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-    # Регистрируем обработчики
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    logger.info('Starting bot...')
-    app.run_polling()
+    bot = OfficeAssistantBot()
+    bot.run()
 
 if __name__ == '__main__':
     main()
-
